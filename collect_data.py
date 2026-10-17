@@ -1,7 +1,7 @@
 """
 Сбор POI города Астана из OpenStreetMap (Overpass API).
 Запуск: python collect_data.py
-Результат: data/raw_poi.json + статистика по категориями в консоли.
+Результат: data/raw_poi.json 
 """
 import json
 import os
@@ -12,15 +12,16 @@ from datetime import date
 import requests
 
 OVERPASS_URLS = [
+    "https://overpass.private.coffee/api/interpreter",
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
-# Прямоугольник вокруг Астаны: юг, запад, север, восток
+
 BBOX = "50.98,71.25,51.28,71.70"
 
 QUERY = f"""
-[out:json][timeout:90];
+[out:json][timeout:60];
 (
   nwr["amenity"="cafe"]({BBOX});
   nwr["amenity"="restaurant"]({BBOX});
@@ -31,6 +32,21 @@ QUERY = f"""
 );
 out center tags;
 """
+
+CATEGORY_DEFAULT_NAMES = {
+    "playground": "Детская площадка",
+    "park": "Парк / Сквер",
+    "cafe": "Кафе",
+    "restaurant": "Ресторан",
+    "cinema": "Кинотеатр",
+    "museum": "Музей",
+    "gallery": "Галерея",
+    "viewpoint": "Смотровая площадка",
+    "attraction": "Достопримечательность",
+    "historic": "Историческое место",
+    "other": "Интересное место",
+}
+
 
 def classify(tags: dict) -> str:
     if tags.get("amenity") == "cafe":
@@ -57,6 +73,7 @@ def classify(tags: dict) -> str:
         return "historic"
     return "other"
 
+
 def fetch() -> dict:
     last_err = None
     headers = {
@@ -66,29 +83,37 @@ def fetch() -> dict:
     for url in OVERPASS_URLS:
         try:
             print(f"Запрос к {url} ...")
-            r = requests.post(url, data={"data": QUERY}, headers=headers, timeout=120)
+            r = requests.post(url, data={"data": QUERY}, headers=headers, timeout=90)
             r.raise_for_status()
             return r.json()
         except Exception as e:
             last_err = e
             print("Ошибка:", e, "- пробую следующий сервер")
-            time.sleep(3)
+            time.sleep(2)
     raise RuntimeError(f"Не удалось получить данные: {last_err}")
+
 
 def to_record(el: dict):
     tags = el.get("tags", {})
     lat = el.get("lat") or (el.get("center") or {}).get("lat")
     lon = el.get("lon") or (el.get("center") or {}).get("lon")
-    name = tags.get("name:ru") or tags.get("name") or tags.get("name:en")
-    if not (name and lat and lon):
+    
+    if not (lat and lon):
         return None
+
+    cat = classify(tags)
+    name = tags.get("name:ru") or tags.get("name") or tags.get("name:en")
+    
+    if not name:
+        name = CATEGORY_DEFAULT_NAMES.get(cat, "Интересное место")
+
     hours = tags.get("opening_hours")
     return {
         "id": f"osm_{el['type']}_{el['id']}",
         "name": name,
         "lat": lat,
         "lon": lon,
-        "category": classify(tags),
+        "category": cat,
         "description": tags.get("description:ru") or tags.get("description"),
         "description_source": "osm" if (tags.get("description:ru") or tags.get("description")) else None,
         "opening_hours": hours,
@@ -101,6 +126,7 @@ def to_record(el: dict):
         "source": "OpenStreetMap",
         "last_updated": date.today().isoformat(),
     }
+
 
 def main():
     data = fetch()
@@ -127,6 +153,7 @@ def main():
     print(f"\nС часами работы: {with_hours}")
     print(f"С описанием:     {with_desc}")
     print("Сохранено в data/raw_poi.json")
+
 
 if __name__ == "__main__":
     main()
